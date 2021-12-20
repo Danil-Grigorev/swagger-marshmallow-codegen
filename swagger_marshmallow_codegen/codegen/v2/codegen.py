@@ -245,6 +245,7 @@ class SchemaWriter:
     def write_schema(
         self, c, d, clsname, definition, force=False, meta_writer=None, many=False
     ):
+        description = definition and definition.get('description', None)
         if not force and clsname in self.arrived:
             return
         self.arrived.add(clsname)
@@ -324,8 +325,14 @@ class SchemaWriter:
                     base_classes = [ref_name]
 
         with c.m.class_(clsname, bases=base_classes):
-            if "description" in definition:
-                c.m.stmt('"""{}"""'.format(definition["description"]))
+            if description:
+                c.m.stmt('"""')
+                for line in (
+                    description.rstrip("\n").split("\n")
+                ):
+                    c.m.stmt(line)
+                c.m.stmt('"""')
+                c.m.stmt("")
 
             if meta_writer is not None:
                 meta_writer(c.m)
@@ -466,58 +473,57 @@ class PathsSchemaWriter:
             sc = context_factory(path, part=part)
             found = False
             lazy_clsname = self.get_lazy_clsname(path)
-            with sc.m.class_(LazyFormat("{}Input", lazy_clsname)):
-                toplevel_parameters = self.accessor.parameters(methods)
-                if self.OVERRIDE_NAME_MARKER in methods:
-                    lazy_clsname.pop()
-                    lazy_clsname.append(methods[self.OVERRIDE_NAME_MARKER])
-                for method, definition in self.accessor.methods(methods):
-                    ssc = sc.new_child()
-                    with ssc.m.class_(titleize(method)):
-                        if "summary" in definition or "description" in definition:
-                            ssc.m.stmt('"""')
-                            if "summary" in definition:
-                                for line in (
-                                    definition["summary"].rstrip("\n").split("\n")
-                                ):
-                                    ssc.m.stmt(line)
-                            elif "description" in definition:
-                                for line in (
-                                    definition["description"].rstrip("\n").split("\n")
-                                ):
-                                    ssc.m.stmt(line)
-                            ssc.m.stmt('"""')
-                            ssc.m.stmt("")
-
-                        path_info = self.build_path_info(
-                            sc,
-                            d,
-                            toplevel_parameters,
-                            self.accessor.parameters(definition),
+            toplevel_parameters = self.accessor.parameters(methods)
+            if self.OVERRIDE_NAME_MARKER in methods:
+                lazy_clsname.pop()
+                lazy_clsname.append(methods[self.OVERRIDE_NAME_MARKER])
+            for method, definition in self.accessor.methods(methods):
+                description = definition.get('definition', None) or definition.get('summary', None)
+                ssc = sc.new_child()
+                path_info = self.build_path_info(
+                    sc,
+                    d,
+                    toplevel_parameters,
+                    self.accessor.parameters(definition),
+                )
+                for section, properties in sorted(path_info.info.items()):
+                    if section is None:
+                        continue
+                    clsname = titleize(section)
+                    if section == "body":
+                        definition = next(iter(properties.values()))["schema"]
+                        self.schema_writer.write_schema(
+                            ssc, d, clsname, definition, force=True
                         )
-                        for section, properties in sorted(path_info.info.items()):
-                            if section is None:
-                                continue
-                            clsname = titleize(section)
-                            if section == "body":
-                                definition = next(iter(properties.values()))["schema"]
-                                self.schema_writer.write_schema(
-                                    ssc, d, clsname, definition, force=True
-                                )
-                            else:
-                                definition = {
-                                    "properties": properties,
-                                    "required": path_info.required[section],
-                                }
-                                self.schema_writer.write_schema(
-                                    ssc, d, clsname, definition, force=True
-                                )
-                        if path_info and not path_info.info:
-                            ssc.m.stmt("pass")
+                    else:
+                        definition = {
+                            "properties": properties,
+                            "required": path_info.required[section],
+                        }
+                        self.schema_writer.write_schema(
+                            ssc, d, clsname, definition, force=True
+                        )
 
-                    if not path_info:
-                        ssc.m.clear()
-                    found = found or bool(path_info)
+                body_info = self.build_body_info(
+                    sc,
+                    d,
+                    self.accessor.requestBody(definition)
+                )
+                if body_info:
+                    data = {
+                        "properties": body_info['properties'],
+                        "required": body_info.get('required', []),
+                        "description": description,
+                    }
+                    self.schema_writer.write_schema(
+                        ssc, d, LazyFormat("{}{}Input", lazy_clsname, titleize(method)), data, force=True
+                    )
+                # if path_info and not path_info.info and not body_info:
+                #     ssc.m.stmt("pass")
+
+                if not path_info:
+                    ssc.m.clear()
+                found = found or bool(path_info)
             if not found:
                 sc.m.clear()
 
@@ -539,6 +545,22 @@ class PathsSchemaWriter:
                 if p.get("required"):
                     required[section].append(name)
         return PathInfo(info=info, required=required)
+
+    def build_body_info(
+        self,
+        c: Context,
+        fulldata: t.Dict[str, t.Any],
+        *paramaters_set: t.List[t.Dict[str, t.Any]]
+    ):
+        info = defaultdict(OrderedDict)
+        required = defaultdict(list)
+        schema = None
+        for parameters in paramaters_set:
+            if not parameters:
+                continue
+            schema = parameters['content']['application/json']['schema']
+            # logging.info(self.resolver.resolve_ref_definition(c, fulldata, schema))
+            return schema
 
 
 class ResponsesSchemaWriter:

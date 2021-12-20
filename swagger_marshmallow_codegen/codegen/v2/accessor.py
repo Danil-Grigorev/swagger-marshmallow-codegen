@@ -36,6 +36,9 @@ class Accessor:
     def parameters(self, d: t.Dict[str, t.Any]) -> t.List[t.Dict[str, t.Any]]:
         return d.get("parameters") or []
 
+    def requestBody(self, d: t.Dict[str, t.Any]) -> t.List[t.Dict[str, t.Any]]:
+        return d.get("requestBody") or []
+
     def responses(
         self, d: t.Dict[str, t.Any]
     ) -> t.Iterator[t.Tuple[str, t.Dict[str, t.Any]]]:
