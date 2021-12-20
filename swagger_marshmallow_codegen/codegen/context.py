@@ -60,7 +60,7 @@ class Context:
 
     def use_relative(self, name: str) -> t.Any:
         if not self.separated:
-            return f"lambda: {name}()"
+            return f"'{name}'"
         elif self.name == name:
             # self recursion
             return f"lambda: {name}()"
