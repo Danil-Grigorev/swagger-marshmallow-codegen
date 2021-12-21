@@ -22,7 +22,7 @@ TYPE_MAP = {
     Pair(type="string", format=None): "marshmallow.fields:String",
     Pair(type="boolean", format=None): "marshmallow.fields:Boolean",
     Pair(type="string", format="uuid"): "marshmallow.fields:UUID",
-    Pair(type="string", format="date-time"): "marshmallow.fields:AwareDateTime",
+    Pair(type="string", format="date-time"): "marshmallow.fields:LocalDateTime",
     Pair(type="string", format="date"): "marshmallow.fields:Date",
     Pair(type="string", format="time"): "marshmallow.fields:Time",
     Pair(type="string", format="email"): "marshmallow.fields:Email",
@@ -56,15 +56,15 @@ class FormatDispatcher:
         return ReprWrapValidator(self.dispatch_validator(c, value))
 
     def dispatch_validator(self, c, value):
-        from marshmallow.validate import Length, Regexp, OneOf
-        from .validate import Range, MultipleOf, Unique, ItemsRange
+        from marshmallow.validate import Length, Regexp, OneOf, Range
+        from .validate import MultipleOf, Unique
 
         if isinstance(value, (Regexp)):
             c.import_("re")  # xxx
             c.from_("marshmallow.validate", value.__class__.__name__)
-        elif isinstance(value, (Length, OneOf)):
+        elif isinstance(value, (Length, OneOf, Range)):
             c.from_("marshmallow.validate", value.__class__.__name__)
-        elif isinstance(value, (Range, MultipleOf, Unique, ItemsRange)):
+        elif isinstance(value, (MultipleOf, Unique)):
             c.from_("swagger_marshmallow_codegen.validate", value.__class__.__name__)
         return value
 

@@ -7,6 +7,7 @@ from .constants import X_MARSHMALLOW_INLINE
 from .langhelpers import titleize, normalize
 from .dispatcher import Pair
 from . import validate
+from marshmallow import validate as v
 
 if t.TYPE_CHECKING:
     from .dispatcher import FormatDispatcher
@@ -172,11 +173,13 @@ class Resolver:
         if "minimum" in field or "maximum" in field:
             range_opts = {
                 "min": field.get("minimum"),
-                "min_inclusive": not field.get("exclusiveMinimum", False),
                 "max": field.get("maximum"),
-                "max_inclusive": not field.get("exclusiveMaximum", False),
             }
-            add(validate.Range(**range_opts))
+            if field.get("exclusiveMaximum", False):
+                range_opts["max_inclusive"] = False,
+            if field.get("exclusiveMinimum", False):
+                range_opts["min_inclusive"] = False
+            add(v.Range(**range_opts))
         if "minLength" in field or "maxLength" in field:
             length_opts = {"min": field.get("minLength"), "max": field.get("maxLength")}
             add(validate.Length(**length_opts))
@@ -190,11 +193,11 @@ class Resolver:
             multipleof_opts = {"n": field["multipleOf"]}
             add(validate.MultipleOf(**multipleof_opts))
         if "maxItems" in field or "minItems" in field:
-            itemrange_opts = {
+            length_opts = {
                 "max": field.get("maxItems"),
                 "min": field.get("minItems"),
             }
-            add(validate.ItemsRange(**itemrange_opts))
+            add(v.Length(**length_opts))
         if field.get("uniqueItems", False):
             add(validate.Unique())
         return validators
