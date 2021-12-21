@@ -1,5 +1,7 @@
 # -*- coding:utf-8 -*-
+import logging
 import re
+from functools import reduce
 
 
 def normalize(name, ignore_rx=re.compile("[^0-9a-zA-Z_]+")):
@@ -28,7 +30,9 @@ def clsname_from_path(
     path, ignore_rx=re.compile("[^0-9a-zA-Z_]+"), separate_rx=re.compile("[/_]")
 ):
     path_separated = separate_rx.split(path.lstrip("/"))  # xxx:
-    return "".join(titleize(ignore_rx.sub("", name)) for name in path_separated)
+
+    uppercase = ["".join([titleize(ignore_rx.sub("", spl)) for spl in name.split('-')]) for name in path_separated]
+    return "".join(name for name in uppercase)
 
 
 class LazyCallString:
