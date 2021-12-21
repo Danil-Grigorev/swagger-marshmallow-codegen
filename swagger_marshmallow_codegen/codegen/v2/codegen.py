@@ -489,19 +489,23 @@ class PathsSchemaWriter:
                 for section, properties in sorted(path_info.info.items()):
                     if section is None:
                         continue
-                    clsname = titleize(section)
                     if section == "body":
-                        definition = next(iter(properties.values()))["schema"]
+                        data = next(iter(properties.values()))["schema"]
                         self.schema_writer.write_schema(
-                            ssc, d, clsname, definition, force=True
+                            ssc, d, LazyFormat("{}{}Parameters", lazy_clsname, titleize(method)), data, force=True
                         )
                     else:
-                        definition = {
+                        props = next(iter(properties.values()))
+                        if props.get("schema", None):
+                            props['type'] = props.pop('schema')['type']
+                        properties[next(iter(properties.keys()))] = props
+                        data = {
                             "properties": properties,
                             "required": path_info.required[section],
+                            "description": description,
                         }
                         self.schema_writer.write_schema(
-                            ssc, d, clsname, definition, force=True
+                            ssc, d, LazyFormat("{}{}Parameters", lazy_clsname, titleize(method)), data, force=True
                         )
 
                 body_info = self.build_body_info(
@@ -516,14 +520,14 @@ class PathsSchemaWriter:
                         "description": description,
                     }
                     self.schema_writer.write_schema(
-                        ssc, d, LazyFormat("{}{}Input", lazy_clsname, titleize(method)), data, force=True
+                        ssc, d, LazyFormat("{}{}Body", lazy_clsname, titleize(method)), data, force=True
                     )
                 # if path_info and not path_info.info and not body_info:
                 #     ssc.m.stmt("pass")
 
-                if not path_info:
+                if not path_info and not body_info:
                     ssc.m.clear()
-                found = found or bool(path_info)
+                found = found or bool(path_info) or bool(body_info)
             if not found:
                 sc.m.clear()
 
@@ -552,14 +556,14 @@ class PathsSchemaWriter:
         fulldata: t.Dict[str, t.Any],
         *paramaters_set: t.List[t.Dict[str, t.Any]]
     ):
-        info = defaultdict(OrderedDict)
-        required = defaultdict(list)
         schema = None
         for parameters in paramaters_set:
             if not parameters:
                 continue
             schema = parameters['content']['application/json']['schema']
-            # logging.info(self.resolver.resolve_ref_definition(c, fulldata, schema))
+            if schema.get('items', None) and self.resolver.has_ref(schema['items']):
+                _, ref_schema = self.resolver.resolve_ref_definition(c, fulldata, schema['items'])
+                return ref_schema
             return schema
 
 
