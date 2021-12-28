@@ -24,6 +24,7 @@ def main(setup: t.Optional[t.Callable[[Driver], None]] = None):
     parser.add_argument("--legacy", action="store_true")
     parser.add_argument("--strict-additional-properties", action="store_true")
     parser.add_argument("--explicit", action="store_true")
+    parser.add_argument("--model", action="store_true")
 
     parser.add_argument("-d", "--separated-output", default=None)
 
@@ -46,12 +47,14 @@ def main(setup: t.Optional[t.Callable[[Driver], None]] = None):
         "emit_schema": True,
         "emit_input": False,
         "emit_output": False,
+        "emit_model": args.model,
         "additional_properties_default": not args.strict_additional_properties,
         "separated_output": bool(args.separated_output),
     }
     if args.full:
         config["emit_input"] = True
         config["emit_output"] = True
+        config["emit_model"] = True
 
     logger.debug("config is %r", config)
 

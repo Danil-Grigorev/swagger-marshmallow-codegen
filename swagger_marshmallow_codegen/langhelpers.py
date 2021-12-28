@@ -1,7 +1,5 @@
 # -*- coding:utf-8 -*-
-import logging
 import re
-from functools import reduce
 
 
 def normalize(name, ignore_rx=re.compile("[^0-9a-zA-Z_]+")):

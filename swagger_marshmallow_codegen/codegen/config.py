@@ -6,6 +6,7 @@ class ConfigDict(tx.TypedDict, total=False):
     emit_schema: bool  # emit definitions schemas
     emit_input: bool  # emit input schema
     emit_output: bool  # emit output schema
+    emit_model: bool  # emit model for generated schemas
 
     separated_output: bool  # activate separated output
 

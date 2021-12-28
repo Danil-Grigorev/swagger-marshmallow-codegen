@@ -22,6 +22,7 @@ from swagger_marshmallow_codegen.constants import (
 from ..context import Context
 from ..config import ConfigDict
 from .accessor import Accessor
+from marshmallow import Schema
 
 if t.TYPE_CHECKING:
     from swagger_marshmallow_codegen.resolver import Resolver
@@ -32,6 +33,7 @@ NAME_MARKER = X_MARSHMALLOW_NAME
 
 PathInfo = namedtuple("PathInfo", "info, required")
 
+schema_params = Schema().__dict__
 
 class CodegenError(Exception):
     pass
@@ -217,7 +219,7 @@ class SchemaWriter:
         normalized_name = self.resolver.resolve_normalized_name(name)
         if normalized_name != name:
             opts["data_key"] = name
-        if keyword.iskeyword(normalized_name) or normalized_name == "fields":
+        if keyword.iskeyword(normalized_name) or normalized_name in schema_params:
             opts["data_key"] = normalized_name
             normalized_name = normalized_name + "_"
 
@@ -229,6 +231,8 @@ class SchemaWriter:
                 c, d, name, caller_name, field_class_name, field, opts=opts, many=many
             ),
         )
+
+        return normalized_name
 
     def write_primitive_schema(self, c, d, clsname, definition, many=False):
         c.im.from_(self.extra_schema_module, "PrimitiveValueSchema")
@@ -243,13 +247,15 @@ class SchemaWriter:
                     self.write_field_one(c, d, clsname, {}, "value", definition, {})
 
     def write_schema(
-        self, c, d, clsname, definition, force=False, meta_writer=None, many=False
+        self, c, d, clsname, definition, force=False, meta_writer=None, many=False, base_classes=None,
     ):
-        description = definition and definition.get('description', None)
+        field_names = []
         if not force and clsname in self.arrived:
-            return
+            return field_names
+        description = definition and definition.get('description', None)
+        if not base_classes:
+            base_classes = [self.schema_class]
         self.arrived.add(clsname)
-        base_classes = [self.schema_class]
         if self.resolver.has_ref(definition):
             ref_name, ref_definition = self.resolver.resolve_ref_definition(
                 c, d, definition
@@ -265,18 +271,20 @@ class SchemaWriter:
                         c, d, ref_definition["items"]
                     )
                 if not self.resolver.has_schema(d, items):
-                    return self.write_primitive_schema(
+                    self.write_primitive_schema(
                         c, d, clsname, ref_definition, many=many
                     )
+                    return field_names
                 else:
-                    self.write_schema(c, d, ref_name, items)
+                    field_names.extend(self.write_schema(c, d, ref_name, items))
                     base_classes = [ref_name]
             else:
                 if not self.resolver.has_schema(d, ref_definition):
-                    return self.write_primitive_schema(
+                    self.write_primitive_schema(
                         c, d, clsname, ref_definition, many=many
                     )
-                self.write_schema(c, d, ref_name, ref_definition)
+                    return field_names
+                field_names.extend(self.write_schema(c, d, ref_name, ref_definition))
                 base_classes = [ref_name]
         elif self.resolver.has_allof(definition):
             ref_list, ref_definition = self.resolver.resolve_allof_definition(
@@ -292,7 +300,7 @@ class SchemaWriter:
                             "$ref %r is not found", ref_definition
                         )  # xxx
                     else:
-                        self.write_schema(c, d, ref_name, ref_definition)
+                        field_names.extend(self.write_schema(c, d, ref_name, ref_definition))
                         base_classes.append(ref_name)
 
         # supporting additional properties
@@ -306,22 +314,25 @@ class SchemaWriter:
         if "properties" not in definition and (
             "object" != definition.get("type", "object") and "items" not in definition
         ):
-            return self.write_primitive_schema(c, d, clsname, definition, many=many)
+            self.write_primitive_schema(c, d, clsname, definition, many=many)
+            return field_names
 
         if "items" in definition:
             many = True
             if not self.resolver.has_ref(definition["items"]):
-                return self.write_primitive_schema(c, d, clsname, definition, many=many)
+                self.write_primitive_schema(c, d, clsname, definition, many=many)
+                return field_names
             else:
                 ref_name, ref_definition = self.resolver.resolve_ref_definition(
                     c, d, definition["items"]
                 )
                 if ref_name is None:
-                    return self.write_primitive_schema(
+                    self.write_primitive_schema(
                         c, d, clsname, definition, many=many
                     )
+                    return field_names
                 else:
-                    self.write_schema(c, d, ref_name, ref_definition)
+                    field_names.extend(self.write_schema(c, d, ref_name, ref_definition))
                     base_classes = [ref_name]
 
         with c.m.class_(clsname, bases=base_classes):
@@ -352,7 +363,7 @@ class SchemaWriter:
             else:
                 for name, field in properties.items():
                     name = str(name)
-                    self.write_field_one(
+                    field_names.append(self.write_field_one(
                         c,
                         d,
                         clsname,
@@ -361,7 +372,7 @@ class SchemaWriter:
                         field,
                         opts[name],
                         many=self.resolver.has_many(field),
-                    )
+                    ))
 
             # supporting additional properties
             subdef = definition.get("additionalProperties")
@@ -421,6 +432,7 @@ class SchemaWriter:
 
             if need_pass_statement:
                 c.m.stmt("pass")
+        return field_names
 
 
 class DefinitionsSchemaWriter:
@@ -471,7 +483,6 @@ class PathsSchemaWriter:
         part = self.__class__.__name__
         for path, methods in self.accessor.paths(d):
             sc = context_factory(path, part=part)
-            found = False
             lazy_clsname = self.get_lazy_clsname(path)
             toplevel_parameters = self.accessor.parameters(methods)
             if self.OVERRIDE_NAME_MARKER in methods:
@@ -486,50 +497,55 @@ class PathsSchemaWriter:
                     toplevel_parameters,
                     self.accessor.parameters(definition),
                 )
-                for section, properties in sorted(path_info.info.items()):
-                    if section is None:
-                        continue
-                    if section == "body":
-                        data = next(iter(properties.values()))["schema"]
-                        self.schema_writer.write_schema(
-                            ssc, d, LazyFormat("{}{}Parameters", lazy_clsname, titleize(method)), data, force=True
-                        )
-                    else:
-                        props = next(iter(properties.values()))
-                        if props.get("schema", None):
-                            props['type'] = props.pop('schema')['type']
-                        properties[next(iter(properties.keys()))] = props
-                        data = {
-                            "properties": properties,
-                            "required": path_info.required[section],
-                            "description": description,
-                        }
-                        self.schema_writer.write_schema(
-                            ssc, d, LazyFormat("{}{}Parameters", lazy_clsname, titleize(method)), data, force=True
-                        )
-
                 body_info = self.build_body_info(
                     sc,
                     d,
                     self.accessor.requestBody(definition)
                 )
-                if body_info:
-                    data = {
-                        "properties": body_info['properties'],
-                        "required": body_info.get('required', []),
-                        "description": description,
-                    }
-                    self.schema_writer.write_schema(
-                        ssc, d, LazyFormat("{}{}Body", lazy_clsname, titleize(method)), data, force=True
-                    )
-                # if path_info and not path_info.info and not body_info:
-                #     ssc.m.stmt("pass")
+                info = sorted(path_info.info.items())
+                method_bases = []
+                method_kwargs = []
+                paths = ['Path'], filter(lambda section: section[0] == 'path', info)
+                queries = ['Query'], filter(lambda section: section[0] == 'query', info)
+                json_bodies = ['Body'], sorted(body_info.info.items())
 
-                if not path_info and not body_info:
-                    ssc.m.clear()
-                found = found or bool(path_info) or bool(body_info)
-            if not found:
-                sc.m.clear()
+                bodies = filter(lambda section: section[0] == 'body', info)
+                for section, properties in bodies:
+                    name = LazyFormat("{}{}{}", lazy_clsname, titleize(method), titleize(section))
+                    method_bases.append(name)
+                    data = next(iter(properties.values()))["schema"]
+                    data["description"] = description
+                    self.schema_writer.write_schema(
+                        ssc, d, name, data, force=True
+                    )
+
+                for bases, section_type in [json_bodies, queries, paths]:
+                    for section, properties in section_type:
+                        name = LazyFormat("{}{}{}", lazy_clsname, titleize(method), titleize(section))
+                        method_bases.append(name)
+                        for props_data in properties.values():
+                            if props_data.get("schema", None):
+                                props_data['type'] = props_data.pop('schema')['type']
+                        data = {
+                            "properties": properties,
+                            "required": path_info.required[section],
+                            "description": description,
+                        }
+                        bases = bases if self.accessor.config.get('emit_model', False) else []
+                        method_kwargs.extend(self.schema_writer.write_schema(
+                            ssc, d, name, data, base_classes=bases
+                        ))
+
+                if self.accessor.config.get('emit_model', False):
+                    method_bases.append("Model")
+                    with sc.m.class_(LazyFormat("{}{}", lazy_clsname, titleize(method)), bases=method_bases):
+                        sc.m.stmt("_method = '{}'".format(method))
+                        sc.m.stmt("_url = '{}'".format(path))
+                        kwargs = ['{kwarg}=None'.format(kwarg=kwarg) for kwarg in method_kwargs]
+                        if kwargs:
+                            with sc.m.def_('__init__', 'self', '*args', *kwargs, '**kwargs'):
+                                sc.m.stmt('super().__init__(*args, **self._strip(locals()), **kwargs)')
+
 
     def build_path_info(
         self,
@@ -555,16 +571,21 @@ class PathsSchemaWriter:
         c: Context,
         fulldata: t.Dict[str, t.Any],
         *paramaters_set: t.List[t.Dict[str, t.Any]]
-    ):
-        schema = None
+    ) -> PathInfo:
+        info = defaultdict(OrderedDict)
+        required = defaultdict(list)
         for parameters in paramaters_set:
             if not parameters:
                 continue
             schema = parameters['content']['application/json']['schema']
             if schema.get('items', None) and self.resolver.has_ref(schema['items']):
-                _, ref_schema = self.resolver.resolve_ref_definition(c, fulldata, schema['items'])
-                return ref_schema
-            return schema
+                _, schema = self.resolver.resolve_ref_definition(c, fulldata, schema['items'])
+            properties = schema['properties']
+            for name in properties:
+                info['body'][name] = properties[name]
+                if properties[name].get('required', False):
+                    required['body'].append(name)
+        return PathInfo(info=info, required=required)
 
 
 class ResponsesSchemaWriter:
@@ -641,7 +662,6 @@ class Codegen:
         if comment is None:
             comment = """\
 # this is auto-generated by swagger-marshmallow-codegen
-from __future__ import annotations
 """
         if not comment:
             return
@@ -652,6 +672,89 @@ from __future__ import annotations
     def write_import_(self, c: Context) -> None:
         c.from_(*self.schema_class_path.rsplit(":", 1))
         c.from_("marshmallow", "fields")
+        if self.accessor.config.get('emit_model', False):
+            c.from_("marshmallow", "EXCLUDE")
+            c.from_("marshmallow", "post_load")
+
+    def write_model(self, context_factory: ContextFactory) -> None:
+        if not self.accessor.config.get('emit_model', False):
+            return
+
+        def default_operations():
+            sc.m.stmt("_url = ''")
+            sc.m.stmt("_method = ''")
+
+            with sc.m.def_('get_url', 'self'):
+                sc.m.stmt('return self._url')
+
+            with sc.m.def_('get_body', 'self'):
+                sc.m.stmt('return {}')
+
+        def init():
+            with sc.m.def_('__init__', 'self', '*args', '**kwargs'):
+                sc.m.stmt('model_kwargs = self._strip(kwargs)')
+                sc.m.stmt('schema_kwargs = {k:v for k, v in kwargs.items() if k not in model_kwargs}')
+                sc.m.stmt('super().__init__(*args, **schema_kwargs)')
+                with sc.m.for_('key, arg in model_kwargs.items()'):
+                    sc.m.stmt('setattr(self, key, arg)')
+
+        def post_load():
+            sc.m.stmt('@post_load')
+            with sc.m.def_('__load', 'self', 'data', '**kwargs'):
+                sc.m.stmt('return type(self)(**data)')
+
+        def strip():
+            with sc.m.def_('_strip', 'self', 'obj'):
+                with sc.m.if_("hasattr(obj, '__dict__')"):
+                    sc.m.stmt('obj = obj.__dict__')
+                with sc.m.elif_('not isinstance(obj, dict)'):
+                    sc.m.stmt('return obj')
+                sc.m.stmt('return {k:v for k, v in obj.items() if k in self._declared_fields and v is not None}')
+
+        def repr():
+            with sc.m.def_('__repr__', 'self'):
+                sc.m.stmt('args = \', \'.join("{!s}={!r}".format(key,val) for (key,val) in self.__strip(self).items())')
+                sc.m.stmt('return "{}({})".format(self.__class__.__name__, args)')
+
+        def schema_override_methods():
+            with sc.m.def_('validate', 'self', 'obj', '*args', '**kwargs'):
+                sc.m.stmt('return Schema.validate(self, self._strip(obj), *args, **kwargs)')
+
+            with sc.m.def_('dump', 'self', 'obj', '*args', '**kwargs'):
+                sc.m.stmt('return Schema.dump(self, self._strip(obj), *args, **kwargs)')
+
+            with sc.m.def_('load', 'self', 'obj', '*args', '**kwargs'):
+                sc.m.stmt('return Schema.load(self, self._strip(obj), *args, **kwargs)')
+
+        sc = context_factory('', part=self.__class__.__name__)
+        with sc.m.class_('Model', 'Schema'):
+            default_operations()
+            init()
+            strip()
+            repr()
+            schema_override_methods()
+            post_load()
+
+        with sc.m.class_('Query', 'Schema'):
+            with sc.m.def_('get_query', 'self'):
+                sc.m.stmt('query_class = next(filter(lambda c: c.__base__ == __class__, type(self).__bases__))()')
+                sc.m.stmt('query_params = query_class.load(self.__dict__, unknown=EXCLUDE)')
+                sc.m.stmt("args = '&'.join(['{k}={v}'.format(k=k, v=v) for k, v in query_class.dump(query_params).items()])")
+                sc.m.stmt("return '?{args}'.format(args=args) if args else ''")
+
+        with sc.m.class_('Path', 'Schema'):
+            with sc.m.def_('get_url', 'self'):
+                sc.m.stmt('path_class = next(filter(lambda c: c.__base__ == __class__, type(self).__bases__))()')
+                sc.m.stmt('url_params = path_class.load(self.__dict__, unknown=EXCLUDE)')
+                sc.m.stmt('url = super().get_url().format(**path_class.dump(url_params))')
+                sc.m.stmt("query = self.get_query() if hasattr(self, 'get_query') else ''")
+                sc.m.stmt('return url + query')
+
+        with sc.m.class_('Body', 'Schema'):
+            with sc.m.def_('get_body', 'self'):
+                sc.m.stmt('body_class = next(filter(lambda c: c.__base__ == __class__, type(self).__bases__))()')
+                sc.m.stmt('body = body_class.load(self.__dict__, unknown=EXCLUDE)')
+                sc.m.stmt('return body_class.dump(body)')
 
     def write_body(self, d: InputData, *, context_factory: ContextFactory) -> None:
         # TODO: get from context
@@ -677,6 +780,7 @@ from __future__ import annotations
         ctx.m.sep()
 
     def codegen(self, d: InputData, context_factory) -> OutputData:
+        self.write_model(context_factory=context_factory)
         self.write_body(d, context_factory=context_factory)
         return context_factory
 
