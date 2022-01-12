@@ -520,6 +520,8 @@ class PathsSchemaWriter:
                 lazy_clsname.append(methods[self.OVERRIDE_NAME_MARKER])
             for method, definition in self.accessor.methods(methods):
                 path_name = str(LazyFormat("{}{}", lazy_clsname, titleize(method)))
+                if definition.get('operationId', None):
+                    path_name = definition['operationId']
                 logger.info("write method: %s", path_name)
                 sc.store_path(path_name, 'url', path)
                 sc.store_path(path_name, 'operation', method)
@@ -544,7 +546,7 @@ class PathsSchemaWriter:
 
                 bodies = filter(lambda section: section[0] == 'body', info)
                 for section, properties in bodies:
-                    name = LazyFormat("{}{}{}", lazy_clsname, titleize(method), titleize(section))
+                    name = LazyFormat("{}{}", path_name, titleize(section))
                     sc.store_path(path_name, 'method', str(name))
                     properties["description"] = description
                     self.schema_writer.write_schema(
@@ -553,7 +555,7 @@ class PathsSchemaWriter:
 
                 for bases, section_type in [json_bodies, queries, paths]:
                     for section, properties in section_type:
-                        name = LazyFormat("{}{}{}", lazy_clsname, titleize(method), titleize(section))
+                        name = LazyFormat("{}{}", path_name, titleize(section))
                         sc.store_path(path_name, 'method', str(name))
                         for key, props_data in properties.items():
                             if key != "$ref" and props_data.get("schema", None):
@@ -647,9 +649,11 @@ class ResponsesSchemaWriter:
                 lazy_clsname.append(methods[self.OVERRIDE_NAME_MARKER])
             for method, definition in self.accessor.methods(methods):
                 path_name = str(LazyFormat("{}{}", lazy_clsname, titleize(method)))
+                if definition.get('operationId', None):
+                    path_name = definition['operationId']
                 had_response = False
                 for status, definition in self.accessor.responses(definition):
-                    name = LazyFormat("{}{}{}", lazy_clsname, titleize(method), str(status))
+                    name = LazyFormat("{}{}", path_name, str(status))
                     logger.info("write response: %s", name)
                     description = definition.get('description', None)
                     body_info = self.build_body_info(
