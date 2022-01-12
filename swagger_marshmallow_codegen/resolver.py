@@ -48,7 +48,7 @@ class Resolver:
         return self.has_many(d) and self.has_schema(fulldata, d["items"])
 
     def has_many(self, d) -> bool:
-        return d.get("type") == "array" or "items" in d
+        return hasattr(d, 'get') and d.get("type") == "array" or "items" in d
 
     def resolve_normalized_name(self, name: str) -> str:
         return normalize(name)
@@ -73,6 +73,9 @@ class Resolver:
             if not field:
                 return Pair(type="any", format=None)
             return Pair(type="object", format=None)
+        except TypeError as e:
+            logger.error("%s, name=%s", e.args[0], name)
+            return
 
     def resolve_caller_name(
         self, c: Context, field_name: str, field: t.Dict[str, t.Any]
@@ -81,6 +84,8 @@ class Resolver:
             path = "marshmallow.fields:Dict"
         else:
             pair = self.resolve_type_and_format(field_name, field)
+            if not pair:
+                return None
             logger.debug("    resolve: type=%s, format=%s", pair.type, pair.format)
             path = self.dispatcher.dispatch(pair, field)
             if path is None:

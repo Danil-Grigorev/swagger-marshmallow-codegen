@@ -3,6 +3,8 @@ import logging
 import typing as t
 import typing_extensions as tx
 from prestring.python import Module, Symbol, FromStatement
+from collections import defaultdict
+
 
 InputData = t.Dict[str, t.Any]
 if t.TYPE_CHECKING:
@@ -20,6 +22,7 @@ class Context:
         rim: t.Optional[Module] = None,
         relative_imported: t.Optional[t.Dict[str, Symbol]] = None,
         separated: bool = False,
+        collected_paths = None,
     ):
         self.name = name
         self.separated = separated
@@ -31,6 +34,10 @@ class Context:
         self._relative_imported = relative_imported
         if relative_imported is None:
             self._relative_imported = {}
+
+        self.collected_paths = collected_paths
+        if collected_paths is None:
+            self.collected_paths = defaultdict(lambda: defaultdict(list))
 
     def from_(self, module: str, name: str) -> FromStatement:
         logger.debug("      import: module=%s, name=%s", module, name)
@@ -70,6 +77,11 @@ class Context:
         else:
             return f"_use{name}"
 
+    def store_path(self, url, type, value):
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+        self.collected_paths[url][type].extend(value)
+
     def new_child(self) -> Context:
         return self.__class__(
             name=self.name,
@@ -78,6 +90,7 @@ class Context:
             rim=self.rim,
             relative_imported=self._relative_imported,
             separated=self.separated,
+            collected_paths=self.collected_paths
         )
 
 

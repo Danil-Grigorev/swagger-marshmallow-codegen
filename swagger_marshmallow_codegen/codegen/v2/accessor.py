@@ -53,6 +53,9 @@ class Accessor:
     def properties(self, d: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
         return d.get("properties") or {}
 
+    def additional_properties(self, d: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
+        return d.get("additionalProperties", {})
+
     def pattern_properties(self, d: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
         return d.get("patternProperties") or {}
 
@@ -61,6 +64,7 @@ class Accessor:
     ) -> t.Dict[str, t.Any]:
         for name in d.get("required") or []:
             opts[name]["required"] = True
+        d.pop('required', None)
         return opts
 
     def update_option_on_property(
