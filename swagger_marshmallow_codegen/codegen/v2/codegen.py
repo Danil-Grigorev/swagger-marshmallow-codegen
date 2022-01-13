@@ -92,28 +92,30 @@ class SchemaWriter:
                 raise CodegenError(
                     "matched field class is not found. name=%r", name,
                 )
-
+            raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
+            raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
+            inner_caller_name, types = self._get_caller(
+                c,
+                d,
+                name,
+                caller_name,
+                field_class_name,
+                field,
+                opts={},
+                schema_name=schema_name,
+                many=self.resolver.has_many(field),
+            )
             opts.pop("many", None)
             opts = {k: repr(v) for k, v in opts.items()}
             return LazyFormat(
                 "fields.List({})",
                 LazyArgumentsAndKeywords(
                     [
-                        self._get_caller(
-                            c,
-                            d,
-                            name,
-                            caller_name,
-                            field_class_name,
-                            field,
-                            opts={},
-                            schema_name=schema_name,
-                            many=self.resolver.has_many(field),
-                        )
+                        inner_caller_name
                     ],
                     opts,
                 ),
-            )
+            ), [raw_type, *types]
 
         if field is None:
             opts = {k: repr(v) for k, v in opts.items()}
@@ -121,9 +123,9 @@ class SchemaWriter:
                 return LazyFormat(
                     "fields.Nested({})",
                     LazyArgumentsAndKeywords([c.use_relative(field_class_name)], opts,),
-                )
+                ), [field_class_name]
             else:
-                return LazyFormat("{}({})", caller_name, LazyKeywords(opts))
+                return LazyFormat("{}({})", caller_name, LazyKeywords(opts)), []
         elif self.resolver.has_nested(d, field) and field_class_name:
             logger.debug("      nested: %s, %s", caller_name, field_class_name)
             self.accessor.update_option_on_property(c, field, opts)
@@ -131,18 +133,20 @@ class SchemaWriter:
             return LazyFormat(
                 "fields.Nested({})",
                 LazyArgumentsAndKeywords([c.use_relative(field_class_name)], opts,),
-            )
+            ), [field_class_name]
         elif caller_name == "fields.Dict":
             self.accessor.update_option_on_property(c, field, opts)
             try:
                 field = field["additionalProperties"]
             except KeyError:
                 caller_name = self.accessor.resolver.resolve_caller_name(c, name, field)
+                raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
+                raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
                 return LazyFormat(
                     "fields.Dict(keys=fields.String(), values={})",
                     caller_name,
                     LazyKeywords(opts),
-                )
+                ), [raw_type]
 
             if self.resolver.has_ref(field):
                 field_class_name, field = self.resolver.resolve_ref_definition(
@@ -159,39 +163,54 @@ class SchemaWriter:
                 raise CodegenError(
                     "matched field class is not found. name=%r", name,
                 )
-
+            raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
+            raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
             opts = {k: repr(v) for k, v in opts.items()}
+            inner_caller_name, types = self._get_caller(
+                c,
+                d,
+                name,
+                caller_name,
+                field_class_name,
+                self.accessor.additional_properties(field) or field,
+                opts={},
+                schema_name=schema_name,
+                many=self.resolver.has_many(field),
+            )
             return LazyFormat(
                 "fields.Dict(keys=fields.String(), values={})",
                 LazyArgumentsAndKeywords(
                     [
-                        self._get_caller(
-                            c,
-                            d,
-                            name,
-                            caller_name,
-                            field_class_name,
-                            self.accessor.additional_properties(field) or field,
-                            opts={},
-                            schema_name=schema_name,
-                            many=self.resolver.has_many(field),
-                        )
+                        inner_caller_name
                     ],
                     opts,
                 ),
-            )
+            ), [raw_type, *types]
         elif caller_name == "fields.Nested" and self.resolver.has_schema(d, field):
             self.accessor.update_option_on_property(c, field, opts)
             opts = {k: repr(v) for k, v in opts.items()}
             new_ref_name = str(LazyFormat("{}{}", schema_name, titleize(name)))
             self.pending[new_ref_name] = field
-            return LazyFormat("{}('{}')", caller_name, new_ref_name)
+            return LazyFormat("{}('{}')", caller_name, new_ref_name), [new_ref_name]
         else:
             self.accessor.update_option_on_property(c, field, opts)
             opts = {k: repr(v) for k, v in opts.items()}
             if caller_name == "fields.Nested":
                 caller_name = "fields.Field"
-            return LazyFormat("{}({})", caller_name, LazyKeywords(opts))
+            return LazyFormat("{}({})", caller_name, LazyKeywords(opts)), []
+
+    def resolve_types(self, c, type_list):
+        if not type_list:
+            return ''
+        elif type_list[0] == dict:
+            return '{}[str, {}]'.format(type_list[0].__name__, self.resolve_types(c, type_list[1:]))
+        elif type_list[0] == list:
+            return '{}[{}]'.format(type_list[0].__name__, self.resolve_types(c, type_list[1:]))
+        elif isinstance(type_list[0], str):
+            return type_list[0]
+        else:
+            return type_list[0].__name__
+
 
     def write_field_one(
         self, c, d, schema_name, definition, name, field, opts, *, many: bool = False
@@ -218,6 +237,8 @@ class SchemaWriter:
 
         logger.debug("      field: %s", lazy_json_dump(field))
         caller_name = self.accessor.resolver.resolve_caller_name(c, name, field)
+        raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
+        raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
         if caller_name is None:
             logger.error("matched field class is not found. name=%r, schema=%r",
                 name,
@@ -231,13 +252,17 @@ class SchemaWriter:
             opts["data_key"] = normalized_name
             normalized_name = normalized_name + "_"
 
-        # logger.info("  write field: write %s, field=%s", name, caller_name)
+
+        inner_name, types = self._get_caller(
+            c, d, name, caller_name, field_class_name, field, opts=opts, schema_name=schema_name, many=many
+        )
+        caller_type = self.resolve_types(c, [raw_type, *types])
+        logger.info("  write field: name=%s, field=%s, type=%s", name, caller_name, caller_type)
         c.m.stmt(
-            "{} = {}",
+            "{} = {} {}",
             normalized_name,
-            self._get_caller(
-                c, d, name, caller_name, field_class_name, field, opts=opts, schema_name=schema_name, many=many
-            ),
+            inner_name,
+            '# type: {}'.format(caller_type) if self.accessor.config.get('emit_model', False) else ''
         )
 
         return normalized_name
@@ -817,6 +842,9 @@ class Codegen:
             c.from_("marshmallow", "post_load")
             c.from_('requests.exceptions', 'HTTPError')
             c.from_('marshmallow.validate', 'ValidationError')
+            c.from_('datetime', 'datetime')
+            c.from_('datetime', 'date')
+            c.from_('datetime', 'time')
 
     def write_model(self, context_factory: ContextFactory) -> None:
         if not self.accessor.config.get('emit_model', False):
