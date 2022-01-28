@@ -874,13 +874,20 @@ class Codegen:
                     with sc.m.except_('HTTPError as exc'):
                         with sc.m.for_('exception in self._exceptions'):
                             with sc.m.try_():
+                                sc.m.stmt('data = response.json()')
+                            with sc.m.except_('Exception'):
+                                sc.m.stmt('raise exc')
+                            with sc.m.try_():
                                 sc.m.stmt('raise exception.load(exc.response.json())')
                             with sc.m.except_('(ValidationError, AttributeError)'):
                                 sc.m.stmt('pass')
                         sc.m.stmt('raise exc')
                     with sc.m.if_('response.status_code == 204'):
                         sc.m.stmt('return')
-                    sc.m.stmt('data = response.json()')
+                    with sc.m.try_():
+                        sc.m.stmt('data = response.json()')
+                    with sc.m.except_('Exception'):
+                        sc.m.stmt('data = response.text')
                     with sc.m.if_('isinstance(self._response, Schema)'):
                         sc.m.stmt('self._response = self._response.load(data)')
                     sc.m.stmt('return data')
