@@ -2,6 +2,7 @@ from __future__ import annotations
 import typing as t
 import keyword
 import logging
+import re
 from collections import namedtuple
 from collections import defaultdict
 from collections import OrderedDict
@@ -727,7 +728,7 @@ class ResponsesSchemaWriter:
                                 meta_writer=meta,
                                 base_classes=bases
                             )
-                        if not had_response:
+                        if not had_response and not re.match(r'.*[3-5][0-9][0-9]', str(name)):
                             had_response = True
                             sc.store_path(path_name, 'response', str(name))
                         else:
@@ -776,13 +777,15 @@ class MethodWriter:
         return self.accessor.resolver
 
     def write_request(self, sc, info):
-        sc.m.stmt("_response = {}()".format(info['response'][0]))
+        if info.get('response', []):
+            sc.m.stmt("_response = {}()".format(info['response'][0]))
         if info.get('exceptions', []):
             exceptions = '(), '.join(info['exceptions']) + '()'
             sc.m.stmt("_exceptions = [{}]".format(exceptions))
-        with sc.m.def_('request', 'self', 'base_url', 'session'):
-            sc.m.stmt('super().request(base_url, session)')
-            sc.m.stmt('return self._response')
+        if info.get('response', []):
+            with sc.m.def_('request', 'self', 'base_url', 'session'):
+                sc.m.stmt('super().request(base_url, session)')
+                sc.m.stmt('return self._response')
 
     def write(self, d: InputData, *, context_factory: ContextFactory) -> None:
         part = self.__class__.__name__
@@ -796,8 +799,7 @@ class MethodWriter:
             with sc.m.class_(path, bases=bases):
                 sc.m.stmt("_method = '{}'".format(info['operation'][0]))
                 sc.m.stmt("_url = '{}'".format(info['url'][0]))
-                if info.get('response', None):
-                    self.write_request(sc, info)
+                self.write_request(sc, info)
                 kwargs = ['{kwarg}=None'.format(kwarg=kwarg) for kwarg in method_kwargs]
                 if kwargs:
                     with sc.m.def_('__init__', 'self', '*args', *kwargs, '**kwargs'):
