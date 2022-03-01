@@ -933,6 +933,12 @@ class Codegen:
                 sc.m.stmt('args = \', \'.join("{!s}={!r}".format(key,val) for (key,val) in self._strip(self).items())')
                 sc.m.stmt('return "{}({})".format(self.__class__.__name__, args)')
 
+            with sc.m.def_('__str__', 'self'):
+                sc.m.stmt('return repr(self)')
+
+            with sc.m.def_('toJson', 'self'):
+                sc.m.stmt('return self.dump(self)')
+
         def schema_override_methods():
             with sc.m.def_('validate', 'self', 'obj', '*args', '**kwargs'):
                 sc.m.stmt('data = self._strip(obj)')
