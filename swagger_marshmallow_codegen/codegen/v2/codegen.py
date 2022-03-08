@@ -52,6 +52,7 @@ class SchemaWriter:
         self.schema_class = schema_class
         self.arrived = set()
         self.pending = {}
+        self.pending_args = defaultdict(list)
         self.extra_schema_module = (
             extra_schema_module or self.__class__.extra_schema_module
         )
@@ -106,6 +107,7 @@ class SchemaWriter:
                 schema_name=schema_name,
                 many=self.resolver.has_many(field),
             )
+            types = [raw_type] if not types else types
             opts.pop("many", None)
             opts = {k: repr(v) for k, v in opts.items()}
             return LazyFormat(
@@ -116,7 +118,7 @@ class SchemaWriter:
                     ],
                     opts,
                 ),
-            ), [raw_type, *types]
+            ), types
 
         if field is None:
             opts = {k: repr(v) for k, v in opts.items()}
@@ -214,7 +216,7 @@ class SchemaWriter:
 
 
     def write_field_one(
-        self, c, d, schema_name, definition, name, field, opts, *, many: bool = False
+        self, c, d, schema_name, definition, name, field, opts, original_schema_name, *, many: bool = False
     ):
         field_class_name = None
         if self.resolver.has_ref(field):
@@ -223,7 +225,7 @@ class SchemaWriter:
             )
             if self.resolver.has_many(field):
                 return self.write_field_one(
-                    c, d, field_class_name, definition, name, field, opts, many=True
+                    c, d, field_class_name, definition, name, field, opts, original_schema_name=original_schema_name, many=True
                 )
 
             # finding original definition
@@ -231,7 +233,7 @@ class SchemaWriter:
                 ref_name, field = self.resolver.resolve_ref_definition(c, d, field)
                 if self.resolver.has_many(field):
                     return self.write_field_one(
-                        c, d, field_class_name, definition, name, field, opts, many=True
+                        c, d, field_class_name, definition, name, field, opts, original_schema_name=original_schema_name, many=True
                     )
                 if ref_name is None:
                     raise CodegenError("ref: %r is not found", field["$ref"])
@@ -241,9 +243,10 @@ class SchemaWriter:
         raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
         raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
         if caller_name is None:
-            logger.error("matched field class is not found. name=%r, schema=%r",
+            logger.error("matched field class is not found. name=%r, schema=%r, field=%r",
                 name,
-                str(schema_name))
+                str(schema_name),
+                field)
             return 
 
         normalized_name = self.resolver.resolve_normalized_name(name)
@@ -258,13 +261,18 @@ class SchemaWriter:
             c, d, name, caller_name, field_class_name, field, opts=opts, schema_name=schema_name, many=many
         )
         caller_type = self.resolve_types(c, [raw_type, *types])
-        logger.info("  write field: name=%s, field=%s, type=%s", name, caller_name, caller_type)
+        logger.info("  write field: name=%s, field=%s, type=%s", normalized_name, caller_name, caller_type)
         c.m.stmt(
             "{} = {} {}",
             normalized_name,
             inner_name,
             '# type: {}'.format(caller_type) if self.accessor.config.get('emit_model', False) else ''
         )
+        key = original_schema_name if str(schema_name).startswith(str(original_schema_name)) else schema_name
+        if normalized_name not in self.pending_args[key]:
+            if str(normalized_name) == 'excludedDbList':
+                logger.error(str([normalized_name, str(key), str(raw_type), name]))
+            self.pending_args[key].append(normalized_name)
 
         return normalized_name
 
@@ -275,10 +283,10 @@ class SchemaWriter:
                 if many or self.resolver.has_many(definition):
                     definition["type"] = "array"
                     self.write_field_one(
-                        c, d, clsname, {}, "value", definition, {}, many=True
+                        c, d, clsname, {}, "value", definition, {}, original_schema_name=clsname, many=True
                     )
                 else:
-                    self.write_field_one(c, d, clsname, {}, "value", definition, {})
+                    self.write_field_one(c, d, clsname, {}, "value", definition, {}, original_schema_name=clsname)
 
     def write_schema(
         self, c, d, clsname, definition, force=False, meta_writer=None, many=False, base_classes=None,
@@ -324,22 +332,26 @@ class SchemaWriter:
                 base_classes.append(base_classes.pop(base_classes.index('Model')))
             if 'Exception' in base_classes:
                 base_classes.append(base_classes.pop(base_classes.index('Exception')))
-        elif self.resolver.has_allof(definition):
+
+        has_allof = self.resolver.has_allof(definition) or self.resolver.has_allof(self.accessor.properties(definition))
+        if has_allof:
+            definition = self.accessor.properties(definition) or definition
             ref_list, ref_definition = self.resolver.resolve_allof_definition(
                 c, d, definition
             )
-            definition = deepmerge(ref_definition, definition)
-            if ref_list:
-                base_classes = []
-                for ref_name, ref_definition in ref_list:
-                    c.relative_import(ref_name)
-                    if ref_name is None:
-                        raise CodegenError(
-                            "$ref %r is not found", ref_definition
-                        )  # xxx
-                    else:
-                        field_names.extend(self.write_schema(c, d, ref_name, ref_definition))
-                        base_classes.append(ref_name)
+            definition = deepmerge(ref_definition, self.accessor.properties(definition) or definition)
+            if ref_list and'Model' in base_classes:
+                base_classes.remove('Model')
+            for ref_name, ref_definition in ref_list:
+                c.relative_import(ref_name)
+                if ref_name is None:
+                    raise CodegenError(
+                        "$ref %r is not found", ref_definition
+                    )  # xxx
+                else:
+                    logger.error('!!!' + str(clsname) + ' ' + ref_name + str(self.pending_args[ref_name]))
+                    field_names.extend(self.pending_args[ref_name])
+                    base_classes.append(ref_name)
 
         # supporting additional properties
         if (
@@ -402,7 +414,7 @@ class SchemaWriter:
             if not properties and definition and not self.resolver.has_ref(definition) \
                     and not self.accessor.additional_properties(definition):
                 properties = definition
-            if properties or (many and not self.accessor.additional_properties(definition)):
+            if not has_allof and (properties or (many and not self.accessor.additional_properties(definition))):
                 need_pass_statement = False
                 for name, field in properties.items():
                     name = str(name)
@@ -414,6 +426,7 @@ class SchemaWriter:
                         name,
                         field,
                         opts[name],
+                        original_schema_name=clsname,
                         many=self.resolver.has_many(field),
                     )
                     if field_name:
@@ -438,6 +451,7 @@ class SchemaWriter:
                             "additional_field",
                             subdef,
                             OrderedDict(),
+                            original_schema_name=clsname,
                         )
                     else:
                         self.write_field_one(
@@ -448,6 +462,7 @@ class SchemaWriter:
                             "additional_field",
                             subdef,
                             {},
+                            original_schema_name=clsname,
                             many=self.resolver.has_many(subdef),
                         )
 
@@ -475,7 +490,7 @@ class SchemaWriter:
                         c.m.stmt("unknown = {}", unknown_value)
                     need_pass_statement = False
 
-            if any(base in base_classes for base in ('Model', 'Method')) and field_names:
+            if (any(base in base_classes for base in ('Model', 'Method')) or (has_allof and any(base in base_classes for base in ('Base', 'Path', 'Query')))) and field_names:
                 need_pass_statement = False
                 kwargs = ['{kwarg}=None'.format(kwarg=kwarg) for kwarg in field_names]
                 with c.m.def_('__init__', 'self', '*args', *kwargs, '**kwargs'):
@@ -486,6 +501,8 @@ class SchemaWriter:
                 c.m.stmt("pass")
 
         for ref_name, field in self.pending.copy().items():
+            if has_allof and 'Model' in base_classes:
+                base_classes.remove('Model')
             field_names.extend(self.write_schema(c, d, ref_name, field, base_classes=base_classes))
         return field_names
 
@@ -584,7 +601,7 @@ class PathsSchemaWriter:
                         name = LazyFormat("{}{}", path_name, titleize(section))
                         sc.store_path(path_name, 'method', str(name))
                         for key, props_data in properties.items():
-                            if key != "$ref" and props_data.get("schema", None):
+                            if key not in ("$ref", "allOf") and props_data.get("schema", {}).get('type', None):
                                 props_data['type'] = props_data.pop('schema')['type']
                         data = {
                             "properties": properties,
