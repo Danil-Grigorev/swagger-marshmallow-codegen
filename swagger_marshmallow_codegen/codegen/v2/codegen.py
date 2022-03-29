@@ -874,21 +874,32 @@ class Codegen:
             sc.m.stmt("_method = ''")
             sc.m.stmt('_response = None')
             sc.m.stmt('_exceptions = []')
-            with sc.m.def_('get_body', 'self'):
-                sc.m.stmt('return {}')
 
-            with sc.m.def_('get_url', 'self'):
-                sc.m.stmt('return self._url')
+            with sc.m.def_('body', 'self'):
+                with sc.m.try_():
+                    sc.m.stmt('return self.get_body()')
+                with sc.m.except_('AttributeError'):
+                    sc.m.stmt('return {}')
+
+            with sc.m.def_('url', 'self'):
+                with sc.m.try_():
+                    sc.m.stmt('url = self.get_url()')
+                with sc.m.except_('AttributeError'):
+                    sc.m.stmt('url = self._url')
+                with sc.m.try_():
+                    sc.m.stmt('return url + self.get_query()')
+                with sc.m.except_('AttributeError'):
+                    sc.m.stmt('return url')
 
             with sc.m.def_('request', 'self', 'base_url', 'session'):
                 sc.m.stmt('self.load(self)')
                 with sc.m.with_('session() as sess'):
                     sc.m.stmt('kwargs = {}')
-                    sc.m.stmt('body = self.get_body()')
+                    sc.m.stmt('body = self.body()')
                     with sc.m.if_('body'):
                         sc.m.stmt("kwargs['json'] = body")
                     with sc.m.try_():
-                        sc.m.stmt('response = sess.request(self._method, base_url + self.get_url(), **kwargs)')
+                        sc.m.stmt('response = sess.request(self._method, base_url + self.url(), **kwargs)')
                         sc.m.stmt('response.raise_for_status()')
                     with sc.m.except_('HTTPError as exc'):
                         with sc.m.for_('exception in self._exceptions'):
@@ -996,13 +1007,11 @@ class Codegen:
 
         with sc.m.class_('Path', 'Schema'):
             sc.m.stmt("_url = ''")
-            with sc.m.def_('get_query', 'self'):
-                sc.m.stmt("return ''")
 
             with sc.m.def_('get_url', 'self'):
                 sc.m.stmt('path_class = next(filter(lambda c: c.__base__ == __class__, type(self).__bases__))()')
                 sc.m.stmt('url_params = path_class.load(self.__dict__, unknown=EXCLUDE)')
-                sc.m.stmt('return self._url.format(**path_class.dump(url_params)) + self.get_query()')
+                sc.m.stmt('return self._url.format(**path_class.dump(url_params))')
 
         with sc.m.class_('Body', 'Schema'):
             with sc.m.def_('get_body', 'self'):
