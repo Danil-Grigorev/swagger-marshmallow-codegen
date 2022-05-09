@@ -877,6 +877,8 @@ class Codegen:
 
             with sc.m.def_('body', 'self'):
                 with sc.m.try_():
+                    with sc.m.if_('self._list is not None'):
+                        sc.m.return_('[body.get_body() for body in self._list]')
                     sc.m.stmt('return self.get_body()')
                 with sc.m.except_('AttributeError'):
                     sc.m.stmt('return {}')
@@ -925,10 +927,15 @@ class Codegen:
         def init():
             with sc.m.def_('__init__', 'self', '*args', '**kwargs'):
                 sc.m.stmt('model_kwargs = self._strip(kwargs)')
-                sc.m.stmt('schema_kwargs = {k:v for k, v in kwargs.items() if k not in model_kwargs}')
+                sc.m.stmt('schema_kwargs = {k: v for k, v in kwargs.items() if k not in model_kwargs}')
                 sc.m.stmt('super().__init__(*args, **schema_kwargs)')
                 with sc.m.for_('key, arg in model_kwargs.items()'):
                     sc.m.stmt('setattr(self, key, arg)')
+
+        def load_list():
+            with sc.m.def_('load_list', 'self', '_list'):
+                sc.m.stmt('self._list = [self.load(item) for item in _list]')
+                sc.m.return_('self')
 
         def post_load():
             sc.m.stmt('@post_load')
@@ -943,7 +950,7 @@ class Codegen:
                     sc.m.stmt('obj = obj.__dict__')
                 with sc.m.if_('not isinstance(obj, dict)'):
                     sc.m.stmt('return obj')
-                sc.m.stmt('return {k:v for k, v in obj.items() if k not in vars(Schema())}')
+                sc.m.stmt('return {k:v for k, v in obj.items() if k not in vars(Schema()) and k != \'_list\'}')
 
             with sc.m.def_('_strip_locals', 'self', 'locals'):
                 sc.m.stmt('return {k: v for k, v in locals.items() if k not in [\'self\', \'__class__\', \'args\', \'kwargs\'] and v is not None}')
@@ -958,7 +965,7 @@ class Codegen:
                     sc.m.stmt('raise')
         def repr():
             with sc.m.def_('__repr__', 'self'):
-                sc.m.stmt('args = \', \'.join("{!s}={!r}".format(key,val) for (key,val) in self._strip(self).items())')
+                sc.m.stmt('args = \', \'.join("{!s}={!r}".format(key, val) for (key, val) in self._strip(self).items())')
                 sc.m.stmt('return "{}({})".format(self.__class__.__name__, args)')
 
             with sc.m.def_('__str__', 'self'):
@@ -988,11 +995,13 @@ class Codegen:
 
         sc = context_factory('', part=self.__class__.__name__)
         with sc.m.class_('Model', 'Schema'):
+            sc.m.stmt('_list = None')
             init()
             strip()
             get_attr()
             repr()
             schema_override_methods()
+            load_list()
             post_load()
 
         with sc.m.class_('Method', 'Model'):
