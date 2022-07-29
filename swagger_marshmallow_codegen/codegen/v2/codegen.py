@@ -858,6 +858,8 @@ class Codegen:
         c.from_("marshmallow", "fields")
         if self.accessor.config.get('emit_model', False):
             c.from_("marshmallow", "EXCLUDE")
+            c.from_("marshmallow", "INCLUDE")
+            c.from_("marshmallow", "RAISE")
             c.from_("marshmallow", "post_load")
             c.from_('requests.exceptions', 'HTTPError')
             c.from_('marshmallow.validate', 'ValidationError')
@@ -923,6 +925,10 @@ class Codegen:
                     with sc.m.if_('isinstance(self._response, Schema)'):
                         sc.m.stmt('self._response = self._response.load(data)')
                     sc.m.stmt('return data')
+
+        def meta_unknown(operation):
+            with sc.m.class_('Meta', 'Schema'):
+                sc.m.stmt('unknown = {}'.format(operation))
 
         def init():
             with sc.m.def_('__init__', 'self', '*args', '**kwargs'):
@@ -996,6 +1002,7 @@ class Codegen:
         sc = context_factory('', part=self.__class__.__name__)
         with sc.m.class_('Model', 'Schema'):
             sc.m.stmt('_list = None')
+            meta_unknown('INCLUDE')
             init()
             strip()
             get_attr()
@@ -1005,6 +1012,7 @@ class Codegen:
             post_load()
 
         with sc.m.class_('Method', 'Model'):
+            meta_unknown('RAISE')
             default_operations()
 
         with sc.m.class_('Query', 'Schema'):
