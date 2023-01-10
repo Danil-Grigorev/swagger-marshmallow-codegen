@@ -5,7 +5,7 @@ install_requires = [
     "dictknife",
     "PyYAML",
     "prestring",
-    "marshmallow==3.0.0rc5",
+    "marshmallow==3.14.1",
     "magicalimport",
     "typing_extensions",
 ]

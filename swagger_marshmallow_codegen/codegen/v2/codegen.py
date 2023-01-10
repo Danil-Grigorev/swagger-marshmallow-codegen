@@ -967,6 +967,10 @@ class Codegen:
             with sc.m.def_('_strip_locals', 'self', 'locals'):
                 sc.m.stmt('return {k: v for k, v in locals.items() if k not in [\'self\', \'__class__\', \'args\', \'kwargs\'] and v is not None}')
 
+        def _has_processors():
+            with sc.m.def_('_has_processors', 'self', 'tag'):
+                sc.m.stmt('return bool(self._hooks[(tag, True)] or self._hooks[(tag, False)])')
+
         def get_attr():
             with sc.m.def_('__getattr__', 'self', 'key', 'default=None'):
                 with sc.m.try_():
@@ -1017,6 +1021,7 @@ class Codegen:
             init()
             strip()
             get_attr()
+            _has_processors()
             repr()
             eq()
             schema_override_methods()
@@ -1036,7 +1041,6 @@ class Codegen:
 
         with sc.m.class_('Path', 'Schema'):
             sc.m.stmt("_url = ''")
-
             with sc.m.def_('get_url', 'self'):
                 sc.m.stmt('path_class = next(filter(lambda c: c.__base__ == __class__, type(self).__bases__))()')
                 sc.m.stmt('url_params = path_class.load(self.__dict__, unknown=EXCLUDE)')
