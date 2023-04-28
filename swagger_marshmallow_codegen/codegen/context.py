@@ -65,8 +65,9 @@ class Context:
         self.rim.from_(f".{name}", name)
         return None
 
-    def use_relative(self, name: str) -> t.Any:
-        if not self.separated:
+    def use_relative(self, name: str, separated: bool|None = None) -> t.Any:
+        separated = self.separated if separated is None else separated
+        if not separated:
             return f"'{name}'"
         elif self.name == name:
             # self recursion

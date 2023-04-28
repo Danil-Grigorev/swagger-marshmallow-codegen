@@ -126,7 +126,7 @@ class SchemaWriter:
             if caller_name == "fields.Nested":
                 return LazyFormat(
                     "fields.Nested({})",
-                    LazyArgumentsAndKeywords([c.use_relative(field_class_name)], opts,),
+                    LazyArgumentsAndKeywords([c.use_relative(field_class_name, separated=True)], opts,),
                 ), [field_class_name]
             else:
                 return LazyFormat("{}({})", caller_name, LazyKeywords(opts)), []
@@ -136,7 +136,7 @@ class SchemaWriter:
             opts = {k: repr(v) for k, v in opts.items()}
             return LazyFormat(
                 "fields.Nested({})",
-                LazyArgumentsAndKeywords([c.use_relative(field_class_name)], opts,),
+                LazyArgumentsAndKeywords([c.use_relative(field_class_name, separated=True)], opts,),
             ), [field_class_name]
         elif caller_name == "fields.Dict":
             self.accessor.update_option_on_property(c, field, opts)
@@ -195,7 +195,7 @@ class SchemaWriter:
             opts = {k: repr(v) for k, v in opts.items()}
             new_ref_name = str(LazyFormat("{}{}", schema_name, titleize(name)))
             self.pending[new_ref_name] = field
-            return LazyFormat("{}('{}')", caller_name, new_ref_name), [new_ref_name]
+            return LazyFormat("{}({})", caller_name, c.use_relative(new_ref_name, separated=True)), [new_ref_name]
         else:
             self.accessor.update_option_on_property(c, field, opts)
             opts = {k: repr(v) for k, v in opts.items()}
