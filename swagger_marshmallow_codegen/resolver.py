@@ -27,6 +27,9 @@ class Resolver:
     def has_allof(self, d) -> bool:
         return "allOf" in d
 
+    def has_oneof(self, d) -> bool:
+        return "oneOf" in d
+
     def has_schema(self, fulldata, d, cand=("object",), fullscan=True) -> bool:
         typ = d.get("type", None)
         if typ in cand:

@@ -29,6 +29,7 @@ TYPE_MAP = {
     Pair(type="string", format="url"): ["marshmallow.fields:URL", str],
     Pair(type="array", format=None): ["marshmallow.fields:List", list],
     Pair(type="object", format=None): ["marshmallow.fields:Nested", object],
+    Pair(type="oneOf", format=None): ["marshmallow_union:Union", object],
     Pair(type="any", format=None): ["marshmallow.fields:Field", any],
     Pair(type="file", format=None): ["marshmallow.fields:Field", str],
 }

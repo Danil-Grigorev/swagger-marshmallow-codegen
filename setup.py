@@ -6,6 +6,7 @@ install_requires = [
     "PyYAML",
     "prestring",
     "marshmallow==3.14.1",
+    "marshmallow-union==0.1.15.post1",
     "magicalimport",
     "typing_extensions",
 ]

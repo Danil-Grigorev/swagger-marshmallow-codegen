@@ -43,6 +43,7 @@ class CodegenError(Exception):
 
 class SchemaWriter:
     extra_schema_module = "swagger_marshmallow_codegen.schema"
+    ignore_default = ['example']
 
     @classmethod
     def override(cls, *, extra_schema_module=None):
@@ -77,7 +78,7 @@ class SchemaWriter:
     ):
         # {"properties": {"memo": {"$ref": "#/definitions/Memo"}}}
         # name="memo", caller_name="fields.Nested", field_class_name="Memo"
-        if many:
+        if many and caller_name != 'Union':
             self.accessor.update_option_on_property(c, field, opts)
             field = field["items"]
             if self.resolver.has_ref(field):
@@ -130,6 +131,10 @@ class SchemaWriter:
                 ), [field_class_name]
             else:
                 return LazyFormat("{}({})", caller_name, LazyKeywords(opts)), []
+        elif self.resolver.has_nested(d, field) and self.resolver.has_oneof(self.resolver.resolve_ref_definition(None, d, field)[1]):
+            logger.debug("      oneOf: %s, %s, %s", caller_name, field_class_name, opts)
+            options = ', '.join(["{}={}".format(k, v) for k, v in opts.items()]) if opts else ''
+            return "(lambda: {}({}))()".format(field_class_name, options), []
         elif self.resolver.has_nested(d, field) and field_class_name:
             logger.debug("      nested: %s, %s", caller_name, field_class_name)
             self.accessor.update_option_on_property(c, field, opts)
@@ -212,8 +217,10 @@ class SchemaWriter:
             return '{}[{}]'.format(type_list[0].__name__, self.resolve_types(c, type_list[1:]))
         elif isinstance(type_list[0], str):
             return type_list[0]
-        else:
+        elif hasattr(type_list[0], '__name__'):
             return type_list[0].__name__
+        else:
+            return type_list
 
 
     def write_field_one(
@@ -241,6 +248,8 @@ class SchemaWriter:
 
         logger.debug("      field: %s", lazy_json_dump(field))
         caller_name = self.accessor.resolver.resolve_caller_name(c, name, field)
+        if name == 'oneOf':
+            caller_name = self.accessor.resolver.resolve_caller_name(c, name, {'type': name, 'items': field})
         raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
         raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
         if caller_name is None:
@@ -257,7 +266,6 @@ class SchemaWriter:
             opts["data_key"] = normalized_name
             normalized_name = normalized_name + "_"
 
-
         inner_name, types = self._get_caller(
             c, d, name, caller_name, field_class_name, field, opts=opts, schema_name=schema_name, many=many
         )
@@ -269,7 +277,7 @@ class SchemaWriter:
         c.m.stmt(
             "{}{} = {}",
             normalized_name,
-            ': {}'.format(caller_type) if self.accessor.config.get('emit_model', False) else '',
+            ': {}'.format(caller_type) if self.accessor.config.get('emit_model', False) and 'fields' in str(inner_name) else '',
             inner_name,
         )
         key = original_schema_name if str(schema_name).startswith(str(original_schema_name)) else schema_name
@@ -357,6 +365,18 @@ class SchemaWriter:
                     field_names.extend(self.pending_args[ref_name])
                     base_classes.append(ref_name)
 
+        if self.resolver.has_oneof(definition) and definition['oneOf']:
+            names = [self.resolver.resolve_ref_definition(c, d, ref)[0] for ref in definition['oneOf']]
+            schemas = ["fields.Nested(lambda: {}())".format(s) for s in names]
+            c.from_('marshmallow_union', 'Union')
+            c.import_('typing')
+            with c.m.def_(clsname, '**kwargs', return_type="typing.Union{}".format(names)):
+                c.m.stmt("return Union(fields=[{}]{}, **kwargs)".format(
+                    ', '.join(schemas),
+                    ", description='{}'".format(description) if description else '',
+                ))
+            return []
+
         # supporting additional properties
         if (
             hasattr(definition.get("additionalProperties"), "keys")
@@ -422,6 +442,8 @@ class SchemaWriter:
                 need_pass_statement = False
                 for name, field in properties.items():
                     name = str(name)
+                    if name in self.ignore_default:
+                        continue
                     field_name = self.write_field_one(
                         c,
                         d,
@@ -653,8 +675,6 @@ class PathsSchemaWriter:
                 continue
             schema = parameters['content']['application/json']['schema']
             properties = self.resolve_properties(schema)
-            if 'oneOf' in properties:
-                continue
             if 'type' in properties and isinstance(properties['type'], str) and properties['type'] not in ('object', 'array'):
                 continue
             info['body'] = properties
@@ -768,8 +788,6 @@ class ResponsesSchemaWriter:
                 continue
             schema = parameters['content']['application/json']['schema']
             properties = self.resolve_properties(schema)
-            if 'oneOf' in properties:
-                continue
             if 'type' in properties and isinstance(properties['type'], str) and properties['type'] not in ('object', 'array'):
                 continue
             info['body'] = properties
