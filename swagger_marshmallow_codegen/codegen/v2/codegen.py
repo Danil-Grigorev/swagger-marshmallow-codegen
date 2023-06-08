@@ -301,18 +301,6 @@ class SchemaWriter:
 
         return normalized_name
 
-    def write_primitive_schema(self, c, d, clsname, definition, many=False):
-        c.im.from_(self.extra_schema_module, "PrimitiveValueSchema")
-        with c.m.class_(clsname, "PrimitiveValueSchema"):
-            with c.m.class_("schema_class", self.schema_class):
-                if many or self.resolver.has_many(definition):
-                    definition["type"] = "array"
-                    self.write_field_one(
-                        c, d, clsname, {}, "value", definition, {}, original_schema_name=clsname, many=True
-                    )
-                else:
-                    self.write_field_one(c, d, clsname, {}, "value", definition, {}, original_schema_name=clsname)
-
     def write_schema(
         self, c, d, clsname, definition, force=False, meta_writer=None, many=False, base_classes=None,
     ):
@@ -338,18 +326,12 @@ class SchemaWriter:
                         c, d, ref_definition["items"]
                     )
                 if not self.resolver.has_schema(d, items):
-                    self.write_primitive_schema(
-                        c, d, clsname, ref_definition, many=many
-                    )
                     return field_names
                 else:
                     field_names.extend(self.write_schema(c, d, ref_name, items))
                     base_classes.append(ref_name)
             else:
                 if not self.resolver.has_schema(d, ref_definition):
-                    self.write_primitive_schema(
-                        c, d, clsname, ref_definition, many=many
-                    )
                     return field_names
                 field_names.extend(self.write_schema(c, d, ref_name, ref_definition))
                 base_classes.append(ref_name)
@@ -374,7 +356,6 @@ class SchemaWriter:
                         "$ref %r is not found", ref_definition
                     )  # xxx
                 else:
-                    logger.error('!!!' + str(clsname) + ' ' + ref_name + str(self.pending_args[ref_name]))
                     field_names.extend(self.pending_args[ref_name])
                     base_classes.append(ref_name)
 
@@ -392,22 +373,17 @@ class SchemaWriter:
         if "properties" not in definition and (
             isinstance(definition.get("type", "object"), str) and "object" != definition.get("type", "object") and "items" not in definition
         ):
-            self.write_primitive_schema(c, d, clsname, definition, many=many)
             return field_names
 
         if "items" in definition:
             many = True
             if not self.resolver.has_ref(definition["items"]):
-                self.write_primitive_schema(c, d, clsname, definition, many=many)
                 return field_names
             else:
                 ref_name, ref_definition = self.resolver.resolve_ref_definition(
                     c, d, definition["items"]
                 )
                 if ref_name is None:
-                    self.write_primitive_schema(
-                        c, d, clsname, definition, many=many
-                    )
                     return field_names
                 else:
                     field_names.extend(self.write_schema(c, d, ref_name, ref_definition))
@@ -727,7 +703,6 @@ class ResponsesSchemaWriter:
                 for status, definition in self.accessor.responses(definition):
                     name = LazyFormat("{}{}", path_name, str(status))
                     logger.info("write response: %s", name)
-                    description = definition.get('description', None)
                     body_info = self.build_body_info(
                         sc,
                         d,
@@ -755,24 +730,12 @@ class ResponsesSchemaWriter:
                             )
                     elif json_bodies:
                         for section, properties in json_bodies:
-                            def meta(m):
-                                if description:
-                                    data = description
-                                    if isinstance(data, str):
-                                        data = data.rstrip("\n").split("\n")
-                                    m.stmt('"""')
-                                    for line in data:
-                                        m.stmt(line)
-                                    m.stmt('"""')
-                                    m.stmt("")
-
                             data = properties.copy()
                             if body_info.required[section]:
                                 data['required'] =  body_info.required[section]
                             bases = bases if self.accessor.config.get('emit_model', False) else []
                             self.schema_writer.write_schema(
                                 sc, d, name, data,
-                                meta_writer=meta,
                                 base_classes=bases
                             )
                         if not had_response and not re.match(r'.*[3-5][0-9][0-9]', str(name)):
@@ -790,12 +753,23 @@ class ResponsesSchemaWriter:
         info = defaultdict(OrderedDict)
         required = defaultdict(list)
         for parameters in paramaters_set:
-            if not parameters or not parameters.get('content', {}).get('application/json', {}).get('schema', {}):
+            schema = parameters and parameters.get('content', {}).get('application/json', {}).get('schema', {})
+            description = None
+            if not isinstance(parameters, list):
+                description = parameters.get('description') or schema.get('description')
+            if not schema and self.resolver.has_ref(parameters):
+                _, schema = self.resolver.resolve_ref_definition(c, fulldata, parameters) 
+                if schema == parameters:
+                    continue
+                description = description or schema.get('description')
+                schema = schema and schema.get('content', {}).get('application/json', {}).get('schema', {})
+            if self.resolver.is_undefined(schema):
                 continue
-            schema = parameters['content']['application/json']['schema']
             properties = self.resolve_properties(schema)
             if not properties or 'type' in properties and isinstance(properties['type'], str) and properties['type'] not in ('object', 'array'):
                 continue
+            if description and 'description' not in properties:
+                properties['description'] = description
             info['body'] = properties
             required['body'] = schema.get('required', [])
         return PathInfo(info=info, required=required)

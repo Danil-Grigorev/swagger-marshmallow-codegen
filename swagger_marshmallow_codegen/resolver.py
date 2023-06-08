@@ -31,7 +31,7 @@ class Resolver:
         return "oneOf" in d and d["oneOf"]
     
     def is_undefined(self, d) -> bool:
-        return ("undefined" in d and d["undefined"] == True) \
+        return not d or ("undefined" in d and d["undefined"] == True) \
             or ("type" in d and d["type"] == "object" and "additionalProperties" not in d and "properties" not in d)
 
     def has_schema(self, fulldata, d, cand=("object",), fullscan=True) -> bool:
