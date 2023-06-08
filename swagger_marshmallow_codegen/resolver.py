@@ -28,13 +28,21 @@ class Resolver:
         return "allOf" in d
 
     def has_oneof(self, d) -> bool:
-        return "oneOf" in d
+        return "oneOf" in d and d["oneOf"]
+    
+    def is_undefined(self, d) -> bool:
+        return ("undefined" in d and d["undefined"] == True) \
+            or ("type" in d and d["type"] == "object" and "additionalProperties" not in d and "properties" not in d)
 
     def has_schema(self, fulldata, d, cand=("object",), fullscan=True) -> bool:
+        if isinstance(d, (list, str)):
+            return False
         typ = d.get("type", None)
+        if self.is_undefined(d):
+            return False
         if typ in cand:
             return True
-        if "properties" in d:
+        if "properties" in d and "additionalProperties" not in d:
             return True
         if self.has_allof(d):
             return True

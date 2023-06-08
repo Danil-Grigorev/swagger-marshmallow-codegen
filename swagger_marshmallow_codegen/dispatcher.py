@@ -32,6 +32,7 @@ TYPE_MAP = {
     Pair(type="oneOf", format=None): ["marshmallow_union:Union", object],
     Pair(type="any", format=None): ["marshmallow.fields:Field", any],
     Pair(type="file", format=None): ["marshmallow.fields:Field", str],
+    Pair(type="object", format='str'): ["marshmallow.fields:Dict", dict],
 }
 
 

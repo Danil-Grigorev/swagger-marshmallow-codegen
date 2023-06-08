@@ -21,6 +21,8 @@ class Flattener:
         typ = data.get("type")
         if typ == "array" and "items" in data:
             return self.on_array_has_items(data, ctx)
+        elif typ == "object" and "additionalProperties" not in data and "properties" not in data:
+            return {**data, 'undefined': True}
         elif typ is None or typ == "object":
             if from_array or "properties" in data:
                 return self.on_object_has_properties(data, ctx)

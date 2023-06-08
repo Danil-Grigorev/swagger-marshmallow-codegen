@@ -80,6 +80,8 @@ class Accessor:
             opts["missing"] = self.dispatcher.handle_default(
                 c, field["default"], field
             )  # xxx
+        if isinstance(field, (str, list)):
+            return opts
         if field.get("readOnly", False):
             logger.debug("    resolve: dump_only=True")
             opts["dump_only"] = True

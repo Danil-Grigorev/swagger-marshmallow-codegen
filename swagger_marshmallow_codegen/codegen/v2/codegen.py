@@ -43,7 +43,7 @@ class CodegenError(Exception):
 
 class SchemaWriter:
     extra_schema_module = "swagger_marshmallow_codegen.schema"
-    ignore_default = ['example']
+    ignore_default = ['example', 'undefined']
 
     @classmethod
     def override(cls, *, extra_schema_module=None):
@@ -131,10 +131,16 @@ class SchemaWriter:
                 ), [field_class_name]
             else:
                 return LazyFormat("{}({})", caller_name, LazyKeywords(opts)), []
-        elif self.resolver.has_nested(d, field) and self.resolver.has_oneof(self.resolver.resolve_ref_definition(None, d, field)[1]):
+        elif self.resolver.has_oneof(self.resolver.has_nested(d, field) and self.resolver.resolve_ref_definition(None, d, field)[1] or field):
             logger.debug("      oneOf: %s, %s, %s", caller_name, field_class_name, opts)
-            options = ', '.join(["{}={}".format(k, v) for k, v in opts.items()]) if opts else ''
-            return "(lambda: {}({}))()".format(field_class_name, options), []
+            ref_definition = self.resolver.resolve_ref_definition(None, d, field)[1]
+            names = [self.resolver.resolve_ref_definition(c, d, ref)[0] or self.resolver.resolve_caller_name(c, d, ref) for ref in ref_definition['oneOf']]
+            schemas = ["fields.Nested(lambda: {}())".format(s) for s in names]
+            c.from_('marshmallow_union', 'Union')
+            return LazyFormat(
+                "Union(fields=[{}]{})",
+                ", ".join(schemas),
+                ", {}".format(LazyKeywords(opts)) if opts else ""), ["|".join(names)]
         elif self.resolver.has_nested(d, field) and field_class_name:
             logger.debug("      nested: %s, %s", caller_name, field_class_name)
             self.accessor.update_option_on_property(c, field, opts)
@@ -147,13 +153,12 @@ class SchemaWriter:
             self.accessor.update_option_on_property(c, field, opts)
             try:
                 field = field["additionalProperties"]
-            except KeyError:
+            except (KeyError, TypeError):
                 caller_name = self.accessor.resolver.resolve_caller_name(c, name, field)
                 raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
                 raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
                 return LazyFormat(
-                    "fields.Dict(keys=fields.String(), values={})",
-                    caller_name,
+                    "fields.Dict()",
                     LazyKeywords(opts),
                 ), [raw_type]
 
@@ -206,7 +211,11 @@ class SchemaWriter:
             opts = {k: repr(v) for k, v in opts.items()}
             if caller_name == "fields.Nested":
                 caller_name = "fields.Field"
-            return LazyFormat("{}({})", caller_name, LazyKeywords(opts)), []
+            types = []
+            if self.resolver.is_undefined(field):
+                caller_name = "fields.Dict"
+                types = [dict]
+            return LazyFormat("{}({})", caller_name, LazyKeywords(opts)), types
 
     def resolve_types(self, c, type_list):
         if not type_list:
@@ -215,6 +224,10 @@ class SchemaWriter:
             return '{}[str, {}]'.format(type_list[0].__name__, self.resolve_types(c, type_list[1:]))
         elif type_list[0] == list:
             return '{}[{}]'.format(type_list[0].__name__, self.resolve_types(c, type_list[1:]))
+        elif type_list[-1] == dict:
+            return type_list[-1].__name__
+        elif isinstance(type_list[-1], str) and '|' in type_list[-1]:
+            return type_list[-1]
         elif isinstance(type_list[0], str):
             return type_list[0]
         elif hasattr(type_list[0], '__name__'):
@@ -250,6 +263,8 @@ class SchemaWriter:
         caller_name = self.accessor.resolver.resolve_caller_name(c, name, field)
         if name == 'oneOf':
             caller_name = self.accessor.resolver.resolve_caller_name(c, name, {'type': name, 'items': field})
+        elif self.resolver.is_undefined(definition):
+            caller_name = self.accessor.resolver.resolve_caller_name(c, name, {'format': 'str', 'type': 'object'})
         raw_type = self.accessor.resolver.resolve_caller_name(c, name, field, True)
         raw_type = field_class_name or str(schema_name) if raw_type is object else raw_type
         if caller_name is None:
@@ -269,7 +284,7 @@ class SchemaWriter:
         inner_name, types = self._get_caller(
             c, d, name, caller_name, field_class_name, field, opts=opts, schema_name=schema_name, many=many
         )
-        caller_type = self.resolve_types(c, [raw_type, *types])
+        caller_type = self.resolve_types(c, [raw_type, *types] if raw_type else types)
         if opts.get('allow_none'):
             caller_type = '{}|None'.format(caller_type)
         caller_type = caller_type if caller_type in map(str, dir(builtins)) else "'{}'".format(caller_type)
@@ -282,8 +297,6 @@ class SchemaWriter:
         )
         key = original_schema_name if str(schema_name).startswith(str(original_schema_name)) else schema_name
         if normalized_name not in self.pending_args[key]:
-            if str(normalized_name) == 'excludedDbList':
-                logger.error(str([normalized_name, str(key), str(raw_type), name]))
             self.pending_args[key].append(normalized_name)
 
         return normalized_name
@@ -365,17 +378,8 @@ class SchemaWriter:
                     field_names.extend(self.pending_args[ref_name])
                     base_classes.append(ref_name)
 
-        if self.resolver.has_oneof(definition) and definition['oneOf']:
-            names = [self.resolver.resolve_ref_definition(c, d, ref)[0] for ref in definition['oneOf']]
-            schemas = ["fields.Nested(lambda: {}())".format(s) for s in names]
-            c.from_('marshmallow_union', 'Union')
-            c.import_('typing')
-            with c.m.def_(clsname, '**kwargs', return_type="typing.Union{}".format(names)):
-                c.m.stmt("return Union(fields=[{}]{}, **kwargs)".format(
-                    ', '.join(schemas),
-                    ", description='{}'".format(description) if description else '',
-                ))
-            return []
+        if self.resolver.has_oneof(definition):
+            return field_names
 
         # supporting additional properties
         if (
@@ -413,10 +417,11 @@ class SchemaWriter:
             need_pass_statement = True
 
             if description:
+                data = description
+                if isinstance(data, str):
+                    data = data.rstrip("\n").split("\n")
                 c.m.stmt('"""')
-                for line in (
-                    description.rstrip("\n").split("\n")
-                ):
+                for line in data:
                     c.m.stmt(line)
                 c.m.stmt('"""')
                 c.m.stmt("")
@@ -675,7 +680,7 @@ class PathsSchemaWriter:
                 continue
             schema = parameters['content']['application/json']['schema']
             properties = self.resolve_properties(schema)
-            if 'type' in properties and isinstance(properties['type'], str) and properties['type'] not in ('object', 'array'):
+            if not properties or 'type' in properties and isinstance(properties['type'], str) and properties['type'] not in ('object', 'array'):
                 continue
             info['body'] = properties
             required['body'] = schema.get('required', [])
@@ -731,7 +736,7 @@ class ResponsesSchemaWriter:
                     bases, json_bodies = ['Model'], sorted(body_info.info.items())
                     if had_response:
                         bases.append('Exception')
-                    if "schema" in definition:
+                    if "schema" in definition and not self.resolver.is_undefined(definition["schema"]):
                         with sc.m.class_(name):
                             clsname = titleize(method) + status
                             schema_definition = definition["schema"]
@@ -752,10 +757,11 @@ class ResponsesSchemaWriter:
                         for section, properties in json_bodies:
                             def meta(m):
                                 if description:
+                                    data = description
+                                    if isinstance(data, str):
+                                        data = data.rstrip("\n").split("\n")
                                     m.stmt('"""')
-                                    for line in (
-                                        description.rstrip("\n").split("\n")
-                                    ):
+                                    for line in data:
                                         m.stmt(line)
                                     m.stmt('"""')
                                     m.stmt("")
@@ -788,13 +794,15 @@ class ResponsesSchemaWriter:
                 continue
             schema = parameters['content']['application/json']['schema']
             properties = self.resolve_properties(schema)
-            if 'type' in properties and isinstance(properties['type'], str) and properties['type'] not in ('object', 'array'):
+            if not properties or 'type' in properties and isinstance(properties['type'], str) and properties['type'] not in ('object', 'array'):
                 continue
             info['body'] = properties
             required['body'] = schema.get('required', [])
         return PathInfo(info=info, required=required)
 
     def resolve_properties(self, properties):
+        if self.resolver.is_undefined(properties):
+            return None
         if self.accessor.additional_properties(properties):
             return self.resolve_properties(self.accessor.additional_properties(properties))
         elif self.accessor.properties(properties):
