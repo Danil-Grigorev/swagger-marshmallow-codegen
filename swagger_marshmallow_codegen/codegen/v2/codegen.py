@@ -425,6 +425,8 @@ class SchemaWriter:
                     name = str(name)
                     if name in self.ignore_default:
                         continue
+                    if isinstance(field, dict) and field.get('required'):
+                        opts[name]['required'] = True
                     field_name = self.write_field_one(
                         c,
                         d,
